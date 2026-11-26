@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "Simple cross-platform Cloudflare Quick Tunnel desktop app"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/digitalnivuk97-ctrl/quicktunnel"
-homepage = "https://github.com/digitalnivuk97-ctrl/quicktunnel"
-authors = ["digitalnivuk97-ctrl"]
+repository = "https://github.com/DigitalniVuk/quicktunnel"
+homepage = "https://github.com/DigitalniVuk/quicktunnel"
+authors = ["DigitalniVuk"]
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = [

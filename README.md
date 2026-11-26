@@ -96,7 +96,7 @@ cargo test
 - **Windows metadata** — Windows executables embed proper `VERSIONINFO` metadata, an application icon, and a standard `asInvoker` DPI-aware manifest.
 - **Verify a release binary**:
   ```bash
-  gh attestation verify quicktunnel-windows-x86_64.exe --repo digitalnivuk97-ctrl/quicktunnel
+  gh attestation verify quicktunnel-windows-x86_64.exe --repo DigitalniVuk/quicktunnel
   ```
 
 ## License
