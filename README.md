@@ -90,6 +90,15 @@ cargo test
 - **Ephemeral URLs** — Each tunnel receives a newly generated `*.trycloudflare.com` hostname that stops working as soon as the tunnel is stopped.
 - **Automatic cleanup on exit** — Closing QuickTunnel cleanly terminates every active `cloudflared` child process so no stray background tunnels are left running.
 
+## Security & Release Verification
+
+- **Open-source reproducible builds** — Official release binaries are built directly from this repository via GitHub Actions with `actions/attest-build-provenance` and published alongside `SHA256SUMS.txt`.
+- **Windows metadata** — Windows executables embed proper `VERSIONINFO` metadata, an application icon, and a standard `asInvoker` DPI-aware manifest.
+- **Verify a release binary**:
+  ```bash
+  gh attestation verify quicktunnel-windows-x86_64.exe --repo digitalnivuk97-ctrl/quicktunnel
+  ```
+
 ## License
 
-MIT
+This project is licensed under the **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See [LICENSE](LICENSE) for the full text.
