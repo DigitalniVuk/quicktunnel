@@ -27,14 +27,17 @@ mod unix_integration {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::process::{Command, Stdio};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
 
     use quicktunnel::model::{TunnelInfo, TunnelStatus};
 
     static DIR_COUNTER: AtomicUsize = AtomicUsize::new(1);
+    /// Prevents Linux ETXTBSY ("Text file busy") when parallel test threads
+    /// fork/exec while another thread holds a newly created executable script FD open.
+    static SCRIPT_IO_LOCK: Mutex<()> = Mutex::new(());
 
     struct TempDir {
         path: PathBuf,
@@ -52,6 +55,7 @@ mod unix_integration {
         }
 
         fn write_script(&self, name: &str, body: &str) -> PathBuf {
+            let _guard = SCRIPT_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let script_path = self.path.join(name);
             let mut file = File::create(&script_path).expect("create mock script");
             file.write_all(body.as_bytes()).expect("write mock script");
@@ -61,6 +65,11 @@ mod unix_integration {
                 .expect("chmod +x mock script");
             script_path
         }
+    }
+
+    fn start_tunnel_synced(manager: &TunnelManager, addr: &str) -> Result<u64, String> {
+        let _guard = SCRIPT_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        manager.start_tunnel(addr)
     }
 
     impl Drop for TempDir {
@@ -138,10 +147,8 @@ exec sleep 60
             })),
         );
 
-        let id1 = manager.start_tunnel("3000").expect("start tunnel 1");
-        let id2 = manager
-            .start_tunnel("127.0.0.1:5173")
-            .expect("start tunnel 2");
+        let id1 = start_tunnel_synced(&manager, "3000").expect("start tunnel 1");
+        let id2 = start_tunnel_synced(&manager, "127.0.0.1:5173").expect("start tunnel 2");
 
         assert!(id2 > id1);
 
@@ -209,7 +216,7 @@ exec sleep 60
         let fail_bin = dir.write_script("mock-cloudflared-fail", MOCK_FAIL_SCRIPT);
 
         let manager = TunnelManager::with_binary_path(fail_bin, None);
-        let id = manager.start_tunnel(":8080").expect("spawn failing tunnel");
+        let id = start_tunnel_synced(&manager, ":8080").expect("spawn failing tunnel");
 
         let reached_failed = wait_for(Duration::from_secs(5), || {
             matches!(
@@ -244,7 +251,7 @@ exec sleep 60
         let noisy_bin = dir.write_script("mock-cloudflared-noisy", MOCK_NOISY_SCRIPT);
 
         let manager = TunnelManager::with_binary_path(noisy_bin, None);
-        let id = manager.start_tunnel("4000").expect("start noisy tunnel");
+        let id = start_tunnel_synced(&manager, "4000").expect("start noisy tunnel");
 
         let running = wait_for(Duration::from_secs(5), || {
             matches!(
@@ -275,8 +282,8 @@ exec sleep 60
 
         let (pid1, pid2) = {
             let manager = TunnelManager::with_binary_path(mock_bin, None);
-            let id1 = manager.start_tunnel("3001").expect("start tunnel 1");
-            let id2 = manager.start_tunnel("3002").expect("start tunnel 2");
+            let id1 = start_tunnel_synced(&manager, "3001").expect("start tunnel 1");
+            let id2 = start_tunnel_synced(&manager, "3002").expect("start tunnel 2");
 
             let ready = wait_for(Duration::from_secs(5), || {
                 matches!(
