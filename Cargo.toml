@@ -1,0 +1,22 @@
+[package]
+name = "quicktunnel"
+version = "0.1.0"
+edition = "2024"
+description = "Simple cross-platform Cloudflare Quick Tunnel desktop app"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "wayland",
+    "x11",
+] }
+dirs = "6"
+ureq = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
