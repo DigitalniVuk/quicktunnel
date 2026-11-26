@@ -7,6 +7,7 @@ use eframe::egui::{
     RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, Vec2,
 };
 
+use crate::icon::app_logo_color_image;
 use crate::model::{BinarySource, BinaryStatus, TunnelId, TunnelInfo, TunnelStatus};
 use crate::theme::{CONTROL_RADIUS, Palette, apply_theme};
 use crate::tunnel::TunnelManager;
@@ -17,6 +18,7 @@ const QUICK_PORTS: [&str; 4] = [":3000", ":5173", ":8000", ":8080"];
 
 pub struct QuickTunnelApp {
     manager: TunnelManager,
+    logo_texture: egui::TextureHandle,
     dark_mode: bool,
     address_input: String,
     input_error: Option<String>,
@@ -39,8 +41,14 @@ impl QuickTunnelApp {
     pub fn with_manager(cc: &eframe::CreationContext<'_>, manager: TunnelManager) -> Self {
         let dark_mode = true;
         apply_theme(&cc.egui_ctx, dark_mode);
+        let logo_texture = cc.egui_ctx.load_texture(
+            "quicktunnel_logo",
+            app_logo_color_image(),
+            egui::TextureOptions::LINEAR,
+        );
         Self {
             manager,
+            logo_texture,
             dark_mode,
             address_input: String::new(),
             input_error: None,
@@ -97,6 +105,10 @@ impl QuickTunnelApp {
         palette: &Palette,
     ) {
         ui.horizontal(|ui| {
+            ui.add(
+                egui::Image::new(&self.logo_texture).fit_to_exact_size(Vec2::splat(34.0)),
+            );
+            ui.add_space(2.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 ui.label(

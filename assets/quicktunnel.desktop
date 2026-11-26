@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=QuickTunnel
+GenericName=Cloudflare Quick Tunnel Client
+Comment=Create instant Cloudflare Quick Tunnels without touching a terminal
+Exec=quicktunnel
+Icon=quicktunnel
+Terminal=false
+Categories=Network;WebDevelopment;
+Keywords=cloudflare;tunnel;trycloudflare;localhost;proxy;
+StartupNotify=true
+StartupWMClass=quicktunnel

@@ -6,6 +6,7 @@ use quicktunnel::icon::app_icon;
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
+            .with_app_id("quicktunnel")
             .with_title("QuickTunnel — Cloudflare Tunnel")
             .with_inner_size([480.0, 580.0])
             .with_min_inner_size([380.0, 420.0])

@@ -1,4 +1,8 @@
-# QuickTunnel
+<p align="center">
+  <img src="assets/quicktunnel.png" alt="QuickTunnel logo" width="112" height="112" />
+</p>
+
+<h1 align="center">QuickTunnel</h1>
 
 A small, native cross-platform desktop app for creating instant [Cloudflare Quick Tunnels](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/) without touching a terminal.
 
@@ -17,7 +21,7 @@ Type a local address or port, press **Start Tunnel**, and immediately get a publ
 - **Linux** — Native Wayland and X11 support (`x86_64` prebuilt binaries on releases).
 - **Windows 10 / 11** — Native GUI binary with no console window flashes (`x86_64` prebuilt binaries on releases).
 
-Prebuilt binaries (`quicktunnel-linux-x86_64` and `quicktunnel-windows-x86_64.exe`) are attached automatically to tagged GitHub Releases (`v*`).
+Prebuilt binaries (`quicktunnel-linux-x86_64`, `quicktunnel-linux-x86_64.tar.gz` with desktop launcher & icon, and `quicktunnel-windows-x86_64.exe` with embedded multi-resolution icon) are attached automatically to tagged GitHub Releases (`v*`).
 
 ## `cloudflared` Detection & 1-Click Install
 
@@ -66,6 +70,14 @@ Run in development mode or build a small optimized release binary:
 cargo run
 cargo build --release
 # Output: target/release/quicktunnel
+```
+
+To install the binary with its Linux desktop launcher and application icon:
+
+```bash
+install -Dm755 target/release/quicktunnel ~/.local/bin/quicktunnel
+install -Dm644 assets/quicktunnel.png ~/.local/share/icons/hicolor/512x512/apps/quicktunnel.png
+install -Dm644 assets/quicktunnel.desktop ~/.local/share/applications/quicktunnel.desktop
 ```
 
 ### Windows
