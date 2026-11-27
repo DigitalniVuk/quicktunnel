@@ -1,6 +1,7 @@
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,6 +15,14 @@ const BINARY_NAME: &str = "cloudflared.exe";
 const BINARY_NAME: &str = "cloudflared";
 
 const TRYCLOUDFLARE_SUFFIX: &str = ".trycloudflare.com";
+const LOOPBACK_PROBE_TIMEOUT: Duration = Duration::from_millis(50);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedOrigin {
+    pub dial_url: String,
+    pub no_tls_verify: bool,
+    pub origin_server_name: Option<&'static str>,
+}
 
 pub fn managed_binary_path() -> Option<PathBuf> {
     dirs::data_local_dir().map(|dir| dir.join("quicktunnel").join("bin").join(BINARY_NAME))
@@ -205,6 +214,127 @@ pub fn normalize_local_address(input: &str) -> Result<String, String> {
     let authority = trimmed.split(['/', '?', '#']).next().unwrap_or("");
     validate_authority(authority)?;
     Ok(format!("http://{trimmed}"))
+}
+
+pub(crate) fn resolve_origin_target(target_url: &str) -> ResolvedOrigin {
+    resolve_origin_with_probe(target_url, cfg!(windows), tcp_loopback_open)
+}
+
+fn tcp_loopback_open(ip: IpAddr, port: u16) -> bool {
+    TcpStream::connect_timeout(&SocketAddr::new(ip, port), LOOPBACK_PROBE_TIMEOUT).is_ok()
+}
+
+fn resolve_origin_with_probe(
+    target_url: &str,
+    prefer_ipv4_when_unbound: bool,
+    mut is_open: impl FnMut(IpAddr, u16) -> bool,
+) -> ResolvedOrigin {
+    let Some((scheme, after_scheme)) = target_url.split_once("://") else {
+        return ResolvedOrigin {
+            dial_url: target_url.to_string(),
+            no_tls_verify: false,
+            origin_server_name: None,
+        };
+    };
+
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let suffix = &after_scheme[authority.len()..];
+
+    let (userinfo_prefix, host_port) = match authority.rsplit_once('@') {
+        Some((user, hp)) => (&authority[..user.len() + 1], hp),
+        None => ("", authority),
+    };
+
+    let (host, explicit_port) = if host_port.starts_with('[') {
+        match host_port.find(']') {
+            Some(end_bracket) => {
+                let h = &host_port[..=end_bracket];
+                let port = host_port[end_bracket + 1..]
+                    .strip_prefix(':')
+                    .and_then(|p| p.parse::<u16>().ok());
+                (h, port)
+            }
+            None => (host_port, None),
+        }
+    } else if let Some((h, p)) = host_port.split_once(':') {
+        (h, p.parse::<u16>().ok())
+    } else {
+        (host_port, None)
+    };
+
+    let is_localhost = host.eq_ignore_ascii_case("localhost");
+    let is_ipv4_loopback = host.parse::<Ipv4Addr>().is_ok_and(|ip| ip.is_loopback());
+    let is_ipv6_loopback = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .and_then(|s| s.parse::<Ipv6Addr>().ok())
+        .is_some_and(|ip| ip.is_loopback());
+    let is_loopback = is_localhost || is_ipv4_loopback || is_ipv6_loopback;
+
+    // On Windows, `localhost` often resolves to [::1] before 127.0.0.1, causing 502s when local servers bind IPv4-only.
+    let resolved_host = if is_localhost {
+        let port = explicit_port.unwrap_or(if scheme == "https" { 443 } else { 80 });
+        if is_open(IpAddr::V4(Ipv4Addr::LOCALHOST), port) {
+            "127.0.0.1"
+        } else if is_open(IpAddr::V6(Ipv6Addr::LOCALHOST), port) {
+            "[::1]"
+        } else if prefer_ipv4_when_unbound {
+            "127.0.0.1"
+        } else {
+            host
+        }
+    } else {
+        host
+    };
+
+    let dial_url = if resolved_host == host {
+        target_url.to_string()
+    } else {
+        match explicit_port {
+            Some(port) => format!("{scheme}://{userinfo_prefix}{resolved_host}:{port}{suffix}"),
+            None => format!("{scheme}://{userinfo_prefix}{resolved_host}{suffix}"),
+        }
+    };
+
+    let no_tls_verify = scheme == "https" && is_loopback;
+    let origin_server_name =
+        if no_tls_verify && is_localhost && !resolved_host.eq_ignore_ascii_case("localhost") {
+            Some("localhost")
+        } else {
+            None
+        };
+
+    ResolvedOrigin {
+        dial_url,
+        no_tls_verify,
+        origin_server_name,
+    }
+}
+
+pub(crate) fn build_tunnel_args(origin: &ResolvedOrigin, is_windows: bool) -> Vec<String> {
+    let mut args = vec![
+        "tunnel".to_string(),
+        "--url".to_string(),
+        origin.dial_url.clone(),
+        "--no-autoupdate".to_string(),
+        "--config".to_string(),
+        String::new(),
+        "--metrics".to_string(),
+        "127.0.0.1:0".to_string(),
+    ];
+    // Windows Defender Firewall and many networks block/delay outbound UDP 7844 (QUIC).
+    if is_windows {
+        args.push("--protocol".to_string());
+        args.push("http2".to_string());
+    }
+    if origin.no_tls_verify {
+        args.push("--no-tls-verify".to_string());
+    }
+    if let Some(sni) = origin.origin_server_name {
+        args.push("--origin-server-name".to_string());
+        args.push(sni.to_string());
+    }
+    args
 }
 
 pub fn extract_tunnel_url(line: &str) -> Option<String> {
@@ -609,5 +739,144 @@ mod tests {
         assert!(download_url_for("windows", "x86").unwrap().ends_with("cloudflared-windows-386.exe"));
         assert!(download_url_for("windows", "aarch64").unwrap().ends_with("cloudflared-windows-amd64.exe"));
         assert!(download_url_for("freebsd", "x86_64").is_err());
+    }
+
+    #[test]
+    fn resolve_origin_probes_ipv4_and_ipv6_for_localhost() {
+        let ipv4_only = |ip: IpAddr, port: u16| ip == IpAddr::V4(Ipv4Addr::LOCALHOST) && port == 3000;
+        let res = resolve_origin_with_probe("http://localhost:3000", false, ipv4_only);
+        assert_eq!(res.dial_url, "http://127.0.0.1:3000");
+        assert!(!res.no_tls_verify);
+        assert_eq!(res.origin_server_name, None);
+
+        let ipv6_only = |ip: IpAddr, port: u16| ip == IpAddr::V6(Ipv6Addr::LOCALHOST) && port == 5173;
+        let res = resolve_origin_with_probe("http://localhost:5173", true, ipv6_only);
+        assert_eq!(res.dial_url, "http://[::1]:5173");
+
+        let both_open = |_ip: IpAddr, port: u16| port == 3000;
+        let res = resolve_origin_with_probe("http://localhost:3000", false, both_open);
+        assert_eq!(res.dial_url, "http://127.0.0.1:3000");
+
+        let none_open = |_ip: IpAddr, _port: u16| false;
+        let res_win = resolve_origin_with_probe("http://localhost:3000", true, none_open);
+        assert_eq!(res_win.dial_url, "http://127.0.0.1:3000");
+
+        let res_unix = resolve_origin_with_probe("http://localhost:3000", false, none_open);
+        assert_eq!(res_unix.dial_url, "http://localhost:3000");
+
+        let port_80 = |ip: IpAddr, port: u16| ip == IpAddr::V4(Ipv4Addr::LOCALHOST) && port == 80;
+        let res_default_port = resolve_origin_with_probe("http://localhost/api", false, port_80);
+        assert_eq!(res_default_port.dial_url, "http://127.0.0.1/api");
+
+        let port_8080 = |ip: IpAddr, port: u16| ip == IpAddr::V4(Ipv4Addr::LOCALHOST) && port == 8080;
+        let res_userinfo =
+            resolve_origin_with_probe("http://user:pass@localhost:8080/x?a=1", false, port_8080);
+        assert_eq!(res_userinfo.dial_url, "http://user:pass@127.0.0.1:8080/x?a=1");
+    }
+
+    #[test]
+    fn resolve_origin_sets_tls_flags_only_for_loopback_https() {
+        let ipv4_8443 = |ip: IpAddr, port: u16| ip == IpAddr::V4(Ipv4Addr::LOCALHOST) && port == 8443;
+        let res_localhost = resolve_origin_with_probe("https://localhost:8443", true, ipv4_8443);
+        assert_eq!(res_localhost.dial_url, "https://127.0.0.1:8443");
+        assert!(res_localhost.no_tls_verify);
+        assert_eq!(res_localhost.origin_server_name, Some("localhost"));
+
+        let res_v4 = resolve_origin_with_probe("https://127.0.0.1:8443", true, ipv4_8443);
+        assert_eq!(res_v4.dial_url, "https://127.0.0.1:8443");
+        assert!(res_v4.no_tls_verify);
+        assert_eq!(res_v4.origin_server_name, None);
+
+        let res_v6 = resolve_origin_with_probe("https://[::1]:8443", true, ipv4_8443);
+        assert_eq!(res_v6.dial_url, "https://[::1]:8443");
+        assert!(res_v6.no_tls_verify);
+        assert_eq!(res_v6.origin_server_name, None);
+
+        let res_lan = resolve_origin_with_probe("https://192.168.1.50:8443", true, ipv4_8443);
+        assert_eq!(res_lan.dial_url, "https://192.168.1.50:8443");
+        assert!(!res_lan.no_tls_verify);
+        assert_eq!(res_lan.origin_server_name, None);
+    }
+
+    #[test]
+    fn resolve_origin_detects_live_tcp_listener() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        let res = resolve_origin_target(&format!("http://localhost:{port}"));
+        assert_eq!(res.dial_url, format!("http://127.0.0.1:{port}"));
+        drop(listener);
+    }
+
+    #[test]
+    fn build_tunnel_args_includes_platform_and_tls_flags() {
+        let linux_http = ResolvedOrigin {
+            dial_url: "http://localhost:3000".to_string(),
+            no_tls_verify: false,
+            origin_server_name: None,
+        };
+        let linux_args = build_tunnel_args(&linux_http, false);
+        assert_eq!(&linux_args[..3], &["tunnel", "--url", "http://localhost:3000"]);
+        assert_eq!(
+            linux_args,
+            vec![
+                "tunnel",
+                "--url",
+                "http://localhost:3000",
+                "--no-autoupdate",
+                "--config",
+                "",
+                "--metrics",
+                "127.0.0.1:0",
+            ]
+        );
+
+        let win_http = ResolvedOrigin {
+            dial_url: "http://127.0.0.1:3000".to_string(),
+            no_tls_verify: false,
+            origin_server_name: None,
+        };
+        let win_http_args = build_tunnel_args(&win_http, true);
+        assert_eq!(&win_http_args[..3], &["tunnel", "--url", "http://127.0.0.1:3000"]);
+        assert_eq!(
+            win_http_args,
+            vec![
+                "tunnel",
+                "--url",
+                "http://127.0.0.1:3000",
+                "--no-autoupdate",
+                "--config",
+                "",
+                "--metrics",
+                "127.0.0.1:0",
+                "--protocol",
+                "http2",
+            ]
+        );
+
+        let win_https = ResolvedOrigin {
+            dial_url: "https://127.0.0.1:8443".to_string(),
+            no_tls_verify: true,
+            origin_server_name: Some("localhost"),
+        };
+        let win_https_args = build_tunnel_args(&win_https, true);
+        assert_eq!(&win_https_args[..3], &["tunnel", "--url", "https://127.0.0.1:8443"]);
+        assert_eq!(
+            win_https_args,
+            vec![
+                "tunnel",
+                "--url",
+                "https://127.0.0.1:8443",
+                "--no-autoupdate",
+                "--config",
+                "",
+                "--metrics",
+                "127.0.0.1:0",
+                "--protocol",
+                "http2",
+                "--no-tls-verify",
+                "--origin-server-name",
+                "localhost",
+            ]
+        );
     }
 }

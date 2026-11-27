@@ -312,4 +312,32 @@ exec sleep 60
             "Drop must terminate and reap tunnel 2 (pid {pid2})"
         );
     }
+
+    #[test]
+    fn localhost_rewrites_to_listening_ipv4_for_cloudflared() {
+        let dir = TempDir::new("loopback");
+        let mock_bin = dir.write_script("mock-cloudflared", MOCK_LIVE_SCRIPT);
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+
+        let manager = TunnelManager::with_binary_path(mock_bin, None);
+        let id = start_tunnel_synced(&manager, &format!("localhost:{port}"))
+            .expect("start loopback tunnel");
+
+        let running = wait_for(Duration::from_secs(5), || {
+            matches!(
+                find_tunnel(&manager, id).map(|t| t.status),
+                Some(TunnelStatus::Running { .. })
+            )
+        });
+        assert!(running, "loopback tunnel should reach Running state");
+
+        let info = find_tunnel(&manager, id).unwrap();
+        assert_eq!(info.target_url, format!("http://localhost:{port}"));
+        let expected_url = format!("https://mock-http-127-0-0-1-{port}.trycloudflare.com");
+        assert_eq!(info.status.public_url(), Some(expected_url.as_str()));
+
+        drop(listener);
+        manager.stop_all();
+    }
 }

@@ -8,8 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cloudflared::{
-    configure_background_command, detect_binary, extract_tunnel_url, install_cloudflared,
-    normalize_local_address, probe_binary_version, strip_ansi,
+    build_tunnel_args, configure_background_command, detect_binary, extract_tunnel_url,
+    install_cloudflared, normalize_local_address, probe_binary_version, resolve_origin_target,
+    strip_ansi,
 };
 use crate::model::{BinarySource, BinaryStatus, RepaintCallback, TunnelId, TunnelInfo, TunnelStatus};
 
@@ -229,8 +230,12 @@ impl TunnelManager {
             }
         };
 
+        let origin = resolve_origin_target(&target_url);
+        let args = build_tunnel_args(&origin, cfg!(windows));
+
         let mut cmd = Command::new(&binary_path);
-        cmd.args(["tunnel", "--url", &target_url, "--no-autoupdate"])
+        cmd.args(&args)
+            .env("TUNNEL_NO_PRECHECKS", "true")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
